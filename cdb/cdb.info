@@ -1,0 +1,4 @@
+name = cdb
+description = CouchDB integration, depends on Php-On-Couch lib
+core = 7.x
+package = CouchDB

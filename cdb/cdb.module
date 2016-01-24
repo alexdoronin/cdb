@@ -1,0 +1,519 @@
+<?php
+/**
+ * TODO:
+ * 1. add requirements for php-on-couch
+ * 2. Добавить через администрирование URL по которому задаём настройки логирования да/нет и логируем каждый запрос.
+ * Или через доп. параметр к каждой функции
+ *
+ */
+
+
+/**
+ * Drupal wrapper module for a php library PHP-on-Couch, https://github.com/dready92/PHP-on-Couch
+ * It's just an API module. There is no an UI functionality.
+ */
+
+
+/**
+ * Инициализация объекта типа couchClient, для работы с базой данных CouchDB (библиотека PHP-on-Couch)
+ *
+ * @param $couchdb_server_dsn
+ *   Название или путь к серверу, например: localhost:5984
+ *
+ * @param $couchdb_database_name
+ *   Название базы данных
+ *
+ * @return bool|couchClient|int
+ *   Объект или ошибка exception или Flase, если нет библиотеки
+ */
+function cdb_init_connection($couchdb_server_dsn, $couchdb_database_name) {
+  $client = FALSE;
+
+  if ($lib_path = libraries_get_path('PHP-on-Couch')) {
+    require_once $lib_path . "/couch.php";
+    require_once $lib_path . "/couchClient.php";
+    require_once $lib_path . "/couchDocument.php";
+    try {
+      $client = new couchClient($couchdb_server_dsn, $couchdb_database_name);
+    }
+    catch(Exception $e) {
+      $err = "CoudhDB module error: " . $e->getMessage() . " (" . $e->getCode() . ")";
+      watchdog('CDB', $err);
+      $client = $e->getCode();
+    }
+  }
+
+  return $client;
+}
+
+
+/**
+ * Сохранение документа в CouchDB
+ *
+ * @param $client
+ *   Объект couchClient (база данных, куда пишем)
+ *
+ * @param $object_to_store
+ *   Объект stdClass -- данные, которые сохраняем в базу
+ *
+ * @return
+ *   object CouchDB document storage response
+ *
+ */
+function cdb_store_doc($client, $object_to_store) {
+  $response = NULL;
+
+  if (is_a($client, 'couchClient') && is_object($object_to_store)) {
+    try {
+      $response = $client->storeDoc($object_to_store);
+    } catch (Exception $e) {
+      $err = "CoudhDB module error: " . $e->getMessage() . " (" . $e->getCode() . ")";
+      watchdog('CDB', $err);
+      $response = NULL;
+    }
+  }
+
+  return $response;
+}
+
+/**
+ * Проверка на наличие документа в базе
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $object_id
+ *   ID объекта для проверки
+ *
+ * @return bool|int
+ *   TRUE -- есть, FALSE -- нет, -1 -- ошибка
+ *
+ */
+function cdb_doc_exist($client, $object_id) {
+  $response = -1;
+  if (is_a($client, 'couchClient')) {
+    if (cdb_get_doc($client, $object_id) != NULL) {
+      $response = TRUE;
+    }
+    else {
+      $response = FALSE;
+    }
+  }
+  return $response;
+}
+
+/**
+ * Запрос всех документов в базе данных
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @return StdClass|null
+ *   Объект StdClass с полями (пример):
+ *   - $object->total_rows (Integer) 12
+ *   - $object->offset (Integer) 0
+ *   - $object->rows (Array, 12 elements)
+ *
+ *   Массив $object->rows, это массив объектов stdClass:
+ *   - $object->rows[X]->id // string
+ *   - $object->rows[X]->key // string
+ *   - $object->rows[X]->value // StdClass: $object->rows[X]->value->rev
+ */
+function cdb_get_all_docs($client) {
+  if (is_a($client, 'couchClient')) {
+    return $client->getAllDocs();
+  }
+  else {
+    return NULL;
+  }
+}
+
+/**
+ * Запрос всех документов в полном виде
+ * Аналог $client->include_docs(TRUE)->getAllDocs(), только на выходе сразу объекты.
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @return array|null
+ *   Массив всех объектов (документов) со всеми полями заданной в $client базы данных
+ */
+function cdb_get_all_docs_full($client) {
+  if (is_a($client, 'couchClient')) {
+    $all_docs = $client->getAllDocs();
+    $docs = array();
+    foreach ($all_docs->rows as $row) {
+      $docs[] = $client->getDoc($row->id);
+    }
+    return $docs;
+  }
+  else {
+    return NULL;
+  }
+}
+
+
+/**
+ * Чтение документа по $doc_id
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $doc_id
+ *   $doc_id
+ *
+ * @return
+ *   NULL или объект документа CouchDB
+ */
+function cdb_get_doc($client, $doc_id) {
+  $response = NULL;
+  try {
+    $doc = $client->getDoc($doc_id);
+    $response = $doc;
+  }
+  catch ( Exception $e ) {
+    if ( $e->getCode() == 404 ) {
+      $err = "CoudhDB module error: " . $e->getMessage() . " (" . $e->getCode() . ")";
+      watchdog('CDB', $err);
+      $response = NULL;
+    }
+  }
+  return $response;
+}
+
+
+/**
+ * Удаление документа
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $doc
+ *   Объект -- документ CouchDB. ВАЖНО: объект должен содержать, как минимум: _id и _rev
+ *
+ * @return bool
+ *   TRUE удачное завершение, FALSE неудачное
+ */
+function cdb_delete_doc($client, $doc) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient') && is_object($doc)) {
+    try {
+      $client->deleteDoc($doc);
+      $response = TRUE;
+    }
+    catch (Exception $e) {
+      $err = "CoudhDB module error: " . $e->getMessage() . " (" . $e->getCode() . ")";
+      watchdog('CDB', $err);
+      $response = FALSE;
+    }
+  }
+  return $response;
+}
+
+/**
+ * Удаление всех документов в базе
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @return bool
+ *   TRUE|FALSE
+ *
+ */
+function cdb_delete_all_docs($client) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $all_docs = cdb_get_all_docs($client); // get objects with id, rev and value
+    foreach ($all_docs->rows as $doc) {
+      // We need to pass object with _id and _rev properties, just copy them.
+      $doc->_id = $doc->id;
+      unset($doc->id);
+      $doc->_rev = $doc->value->rev;
+      unset($doc->value);
+      cdb_delete_doc($client, $doc);
+    }
+    $response = TRUE;
+  }
+  return $response;
+}
+
+
+/**
+ * Удаление документов в базе на основе их свойства
+ *
+ * Например:
+ * $res = cdb_delete_selected_docs($client, 'type', 'deductor_stat');
+ * Удалит все документы в которых есть поле type = deductor_stat
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $field_name
+ *   Имя поля (свойство объекта)
+ *
+ * @param $field_value
+ *   Значение поля (свойства объекта)
+ *
+ * @return bool|int
+ *   FALSE если не сработало или количество удаленных документов
+ */
+function cdb_delete_selected_docs($client, $field_name, $field_value) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $all_docs = cdb_get_all_docs_full($client);
+    $i = 0;
+    foreach ($all_docs as $doc) {
+      if (property_exists($doc, $field_name)) {
+        if ($doc->{$field_name} == $field_value) {
+          cdb_delete_doc($client, $doc);
+          $i++;
+        }
+      }
+    }
+    $response = $i;
+  }
+  return $response;
+}
+
+/**
+ * Изменение полей в документе
+ *
+ * Например: cdb_update_document($client, 'f734d7b7ada8e47676e772f22801b889', 'time', time());
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $doc_id
+ * @param $field_name
+ * @param $field_value
+ *
+ * @return bool
+ *   TRUE|FALSE
+ *
+ */
+function cdb_update_document($client, $doc_id, $field_name, $field_value) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    if ($new_doc = cdb_get_doc($client, $doc_id)) {
+      $new_doc->{$field_name} = $field_value;
+      cdb_store_doc($client, $new_doc);
+      $response = TRUE;
+    }
+  }
+  return $response;
+}
+
+/**
+ * Создание базы данных указанной в @see cdb_init_connection
+ *
+ * Например:
+ *   $client = cdb_init_connection('localhost:5984', 'my_new_bd');
+ *   cdb_create_database($client);
+ * Создаст базу 'my_new_bd'
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @return bool
+ *   TRUE|FALSE
+ */
+function cdb_create_database($client) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    if (!$client->databaseExists()) {
+      $client->createDatabase();
+      $response = TRUE;
+    }
+  }
+  return $response;
+}
+
+/**
+ * Удаление базы данных указанной в @see cdb_init_connection
+ *
+ * Например:
+ *   $client = cdb_init_connection('localhost:5984', 'bd_to_delete');
+ *   cdb_delete_database($client);
+ * Удалит базу 'bd_to_delete'
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @return bool
+ *   TRUE|FALSE
+ */
+function cdb_delete_database($client) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    if ($client->databaseExists()) {
+      $client->deleteDatabase();
+      $response = TRUE;
+    }
+  }
+  return $response;
+}
+
+
+/**
+ * Создание View
+ *
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $view_function
+ *   Javascript функция например: 'function(doc) { emit(doc.time,null); }'
+ *
+ * @param $view_name
+ *   Имя view
+ *
+ * @param $design_doc_id
+ *   последняя часть ID документа, полный id будет: _design/{$design_doc_id}
+ *  *
+ * @return bool
+ *   TRUE|FALSE
+ *
+ * Пример создания view для отображения записей с сортировкой по дате (в документах есть поле time):
+ *   $view_function = 'function(doc) { emit(doc.time,null); }';
+ *   $view_name = 'by_date';
+ *   $design_doc_id = 'all_by_date';
+ *   $res = cdb_create_view($client, $view_function, $view_name, $design_doc_id);
+ *
+ *
+ */
+function cdb_create_view($client, $view_function, $view_name, $design_doc_id) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $view_fn = $view_function;
+    $design_doc = new stdClass();
+    $design_doc->_id = '_design/' . $design_doc_id;
+    $design_doc->language = 'javascript';
+    $design_doc->views = array($view_name => array('map' => $view_fn));
+    $check = cdb_doc_exist($client, $design_doc->_id);
+    if (!$check && $check != -1) {
+      cdb_store_doc($client, $design_doc);
+      $response = TRUE;
+    }
+  }
+  return $response;
+}
+
+
+/**
+ * @param $client
+ *  Объект couchClient
+ *
+ * @param $view_id, @param $view_name
+ *   From creating:
+ *   $design_doc->_id = '_design/all'; 'all' <-- view_id
+ *   $design_doc->views = array ( 'by_date'=> array ('map' => $view_fn ) ); <-- 'by_name' - view name
+ *
+ * @return FALSE|Object StdClass
+ *   Объект StdClass с полями (пример):
+ *   - $object->total_rows (Integer) 12
+ *   - $object->offset (Integer) 0
+ *   - $object->rows (Array, 12 elements)
+ *
+ *   Массив $object->rows, это массив объектов stdClass:
+ *   - $object->rows[X]->id // string
+ *   - $object->rows[X]->key // string
+ *   - $object->rows[X]->value // StdClass: $object->rows[X]->value->rev
+ */
+function cdb_get_view($client, $view_id, $view_name) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $check = cdb_doc_exist($client, '_design/' . $view_id);
+    if ($check) {
+      $client->descending(TRUE); // последние записи
+      $response = $client->getView($view_id, $view_name);
+    }
+  }
+  return $response;
+}
+
+/**
+ * @param $client
+ *  Объект couchClient
+ *
+ * @param $view_id, @param $view_name
+ *   From creating:
+ *   $design_doc->_id = '_design/all'; 'all' <-- view_id
+ *   $design_doc->views = array ( 'by_date'=> array ('map' => $view_fn ) ); <-- 'by_name' - view name
+ *
+ * @param $conunt
+ *   Number of results we want to recieve. NULL to all results
+ *
+ * @return FALSE|Array of objects (docs)
+ *
+ */
+function cdb_get_view_objects($client, $view_id, $view_name, $count = NULL) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $check = cdb_doc_exist($client, '_design/' . $view_id);
+    if ($check) {
+      $response = array();
+      if ($count !== NULL && is_integer($count)) {
+        $client->limit($count);
+      }
+      $client->descending(TRUE); // последние записи выводим первыми
+      foreach($client->getView($view_id, $view_name)->rows as $doc) {
+        $response[] = $doc->value;
+      }
+    }
+  }
+  return $response;
+}
+
+/**
+ * @param $client
+ *  Объект couchClient
+ *
+ * @param $view_id, @param $view_name
+ *   From creating:
+ *   $design_doc->_id = '_design/all'; 'all' <-- view_id
+ *   $design_doc->views = array ( 'by_date'=> array ('map' => $view_fn ) ); <-- 'by_name' - view name
+ *
+ * @return FALSE|int
+ *   Число записей во View
+ */
+function cdb_get_view_count($client, $view_id, $view_name) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $check = cdb_doc_exist($client, '_design/' . $view_id);
+    if ($check) {
+      $response = sizeof($client->getView($view_id, $view_name)->rows);
+    }
+  }
+  return $response;
+}
+
+/**
+ * @param $client
+ *   Объект couchClient
+ *
+ * @param $view_id, @param $view_name
+ *   From creating:
+ *   $design_doc->_id = '_design/all'; 'all' <-- view_id
+ *   $design_doc->views = array ( 'by_date'=> array ('map' => $view_fn ) ); <-- 'by_name' - view name
+ *
+ * @param $start_key
+ *   Начальный ключ
+ *
+ * @param $end_key
+ *   Конечный ключ
+ *
+ * @return bool|int
+ *   FALSE или количество записей
+ */
+function cdb_get_view_count_by_keys($client, $view_id, $view_name, $start_key, $end_key) {
+  $response = FALSE;
+  if (is_a($client, 'couchClient')) {
+    $check = cdb_doc_exist($client, '_design/' . $view_id);
+    if ($check) {
+      $client->startkey($start_key);
+      $client->endkey($end_key);
+      $response = sizeof($client->getView($view_id, $view_name)->rows);
+    }
+  }
+  return $response;
+}
+
