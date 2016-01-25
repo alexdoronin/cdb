@@ -13,16 +13,16 @@
 
 
 /**
- * Init an object of couchClient type, required for work with CouchDB (PHP-On-Couch library)
+ * Init the object of couchClient type, required for work with CouchDB (PHP-On-Couch library)
  * 
  * @param $couchdb_server_dsn
  *   Name or path to the server (for example: localhost:5984)
  *
  * @param $couchdb_database_name
- *   Name of a database
+ *   Name of database
  *
  * @return bool|couchClient|int
- *   Object, exception or FALSE (if there is noe library)
+ *   Object, exception or FALSE (if there is no library)
  */
 function cdb_init_connection($couchdb_server_dsn, $couchdb_database_name) {
   $client = FALSE;
@@ -45,13 +45,13 @@ function cdb_init_connection($couchdb_server_dsn, $couchdb_database_name) {
 }
 
 /**
- *  Save a document to CouchDB
+ *  Save document to CouchDB
  *
  * @param $client
- *   Object of the couchClient type (DB that we use to record)
+ *   couchClient object type (DB that we use to record)
  *
  * @param $object_to_store
- *   Object of stdClass  -- data which we want to save to the DB
+ *   stdClass object -- data which we want to save to DB
  *
  * @return
  *   object, CouchDB document storage response
